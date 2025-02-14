@@ -22,8 +22,14 @@ class Tools2D:
         self.letter_queue_capital = self.alphabetize_Capital.copy()  # [A,B,C,D...Z]
         self.letter_index = 0  # 字母的后缀序列
         self.letter_index_capital = 0  # 字母的后缀序列
-        if not screen_info is None:
+        if screen_info:
             self.screeninfo=screen_info
+
+    def reset(self):
+        """
+        调用_init_()重新初始化
+        """
+        self.__init__()
     def get_point_dic(self):
         return self.point_dic
     def get_Segmentline_dic(self):
@@ -32,6 +38,9 @@ class Tools2D:
             back_dic[i]=self.Segmentline_get_info(i)
         return back_dic
     def get_line_dic(self):
+        """
+        line_dic格式:{字母代号:{a:int,k:int,b:int}, 字母代号:{...}, ...}
+        """
         return self.line_dic
     def get_surface_dic(self):
         return self.surface_dic
@@ -197,6 +206,7 @@ class Tools2D:
         """
         把向量按照theta角度(度数)旋转
         vector接受单个点,也接受一组点
+        返回:新的向量列表
         """
         # 将角度转换为弧度
         theta = np.radians(theta)
@@ -213,7 +223,9 @@ class Tools2D:
             return backlist
         np_vector = np.array(vector)
         rotated_vector = np.dot(rotation_matrix, np_vector)# 旋转向量
-        return list(rotated_vector)
+
+        x,y=list(rotated_vector) #防止无限接近0的情况
+        return [self.reduce_errors(x),self.reduce_errors(y)]
     def vector_get_norm(self,vector):
         #math.hypot 函数可以正确处理负数
         back = math.hypot(vector[0],vector[1])
@@ -223,18 +235,26 @@ class Tools2D:
         调整向量的模长
         返回一个新的vector[x,y]
         """
+        print('vector_change_norm输入:',vector)
         if not isinstance(vector, (tuple, list)) or len(vector) != 2:
             raise ValueError(f"平移向量错误,当前为{vector}")
         v_x, v_y = vector
         if v_x == 0 and v_y == 0:
             raise ValueError("无法修改0向量的模长")
         if v_x == 0:
+            if vector[1]<0:
+                #负数情况
+                return [0, -norm]
             return [0, norm]
         if v_y == 0:
+            if vector[0]<0:
+                return [-norm,0]
             return [norm, 0]
         multiple = norm / math.hypot(v_x, v_y)
         back = [v_x * multiple, v_y * multiple]
+        print('vector_change_norm输出:', vector)
         return back
+
     def reduce_errors(self,num,max=1e10,min=1e-10):
         """
         如果接近无穷大返回None，接近无穷小返回0
@@ -252,18 +272,22 @@ class Tools2D:
         if self.reduce_errors(vector[0])==0 and self.reduce_errors(vector[1])==0:
             return None
         if self.reduce_errors(vector[0])==0:
+            #垂直情况
             #x=b ; k=-1 a=0
             return self.line_drop(a=0,k=-1,b=passing_point[0])
         if self.reduce_errors(vector[1])==0:
+            #水平情况
             #y=b ;a=1 k=0
             return self.line_drop(a=1,k=0,b=passing_point[1])
+
         k=self.reduce_errors(vector[1]/vector[0])
         if k is None:
-            a=0
+            a=0 #无穷小
         else:
             a=1
         b=self.line_solve_general(a=a,x=passing_point[0],y=passing_point[1],k=k)['b']
         return self.line_drop(a=a,k=k,b=b,temp=temp)
+
     def line_shift(self,line_letter_or_dic, vector,rewrite=True,drop=True):
         """
             对直线进行平移操作。
@@ -291,24 +315,22 @@ class Tools2D:
             k = -1
             new_b = detail['b']+vector[0]
             detail['b'] = new_b
+            detail['str'] = f'x={-new_b}'
             if drop:
                 return self.line_drop(k=k, b=new_b,a=a)
-
-
-
         else:
             b = detail['b']
             k = detail['k']
             if k == 0:
                 # y=b
                 new_b = detail['b'] + vector[1]
+                detail['str'] = f'y={new_b}'
             else:
                 new_b = b + k * vector[0] - vector[1]
-                # y+v_y = k*(x+v_x) + b
-                # y = kx + k * v_x + b - v_y
-
+                if new_b > 0: detail['str'] = f'y={k}x+{new_b}'
+                if new_b == 0: detail['str'] = f'y={k}x'
+                if new_b < 0: detail['str'] = f'y={k}x{new_b}'
         detail['b']=new_b
-
         if letter is not None:
             if rewrite:
                 # 更新 self.line_dic 中的直线信息
@@ -390,25 +412,25 @@ class Tools2D:
         if a == 0 and k == 0:
             raise ValueError("a和k不能同时为0，请检查输入")
         if a == 0:
-            strline = f"x={round(b / -k,2)}"
-            detaildic['str'] = strline
-            detaildic['b'] = b / k
+            line_str = f"x={round(b / -k / -1, 2)}"
+            detaildic['str'] = line_str
+            detaildic['b'] = b / -k #0y=kx+b b/-k=x
             detaildic['k'] = -1
             detaildic['a'] = 0
         if k == 0:
-            strline = f"y={round(b,2)}"
-            detaildic['str'] = strline
+            line_str = f"y={round(b,2)}"
+            detaildic['str'] = line_str
             detaildic['k'] = 0
             detaildic['b'] = b
         if a == 1 and k != 0:
             if b > 0:
-                strline = f"y={round(k,2)}x+{round(b,2)}"
+                line_str = f"y={round(k,2)}x+{round(b,2)}"
             elif b < 0:
-                strline = f"y={round(k,2)}x-{abs(round(b,2))}"
+                line_str = f"y={round(k,2)}x{(round(b,2))}"
             elif b == 0:
-                strline = f"y={round(k,2)}x"
+                line_str = f"y={round(k,2)}x"
             else: raise ValueError(f"b值出现错误,b为:{b}")
-            detaildic['str'] = strline
+            detaildic['str'] = line_str
             detaildic['k'] = k
             detaildic['b'] = b
         if a != 0 and a != 1 and a is not None:
@@ -485,17 +507,17 @@ class Tools2D:
         if 'a' in line:
             if line['a'] != 0:
                 raise ValueError(f'无法处理a不等于0的时刻，检查line：{line}')
-            # 0=kx+b
+            # 0=-x+b
             value_k = line['k']
             value_b = line['b']
-            value_x = value_b / - value_k
-            # 垂直线只需要y值。
+            value_x = value_b / -value_k
+            #垂直线的Y值(x=b/(-k))
             if y_range is None:
                 raise ValueError(f'垂直线{line}没有y_range无法求解成直线，因为必须要屏幕范围')
-            elif y_range[0] == y_range[1]:  # 垂直线y取值范围为一个点，无法生成直线
-                raise False
+            elif y_range[0] == y_range[1]:
+                raise ValueError(f'垂直线{line}取值范围为一个点，无法生成直线')
 
-            if x_range is not None:
+            if x_range:
                 x_min, x_max = sorted([x_range[0], x_range[1]])
                 if x_min <= value_x <= x_max:  # 垂直线要在x的取值范围中
                     return self.Segmentline_drop(Apoint=[value_x, y_range[0]],
@@ -849,10 +871,10 @@ class Tools2D:
         """
         :param Aline_letter_or_kba_dic: 可以是代号，也可以是save_line(temp=true)的返回值：一个包含k，b，a的字典
         :param Bline_letter_or_kba_dic: 可以是代号，也可以是save_line(temp=true)的返回值：一个包含k，b，a的字典
+        返回值:[x,y]
         """
         x = None
         y = None
-
         if isinstance(Aline_letter_or_kba_dic, str):
             detail_dicA = self.line_dic[Aline_letter_or_kba_dic]
         else:
@@ -1381,12 +1403,14 @@ def screen_draw_lines(linedic,color=py5.color(10,10,0,255),stroke_weight=3):
     screen_info=screen_get_info()
     x_range,y_range=screen_info['x_range'],screen_info['y_range']
     tem=Tools2D()
+
     for key,de_dic in linedic.items():
         #TODO 这里计算量很大，导致单进程效率很低，需要进行多进程处理
         tem.line_to_Segmentline(de_dic,x_range=x_range,y_range=y_range)
     py5.stroke(color)
     py5.stroke_weight(stroke_weight)
     line_todraw=[]
+
     for key, value in tem.Segmentline_dic.items():
         #整理输入参数格式,py5.line需要的格式[[x1 y1 x2 y2] [...]]
         a_point,b_point=tem.Segmentline_get_info(key)['location']
