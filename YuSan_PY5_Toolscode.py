@@ -3,7 +3,7 @@ import py5
 from collections import defaultdict
 import math
 import random
-
+import warnings
 
 class Tools2D:
     """
@@ -1070,7 +1070,9 @@ class Tools2D:
         raise ValueError(f'缺少必要参数: location_point={location_point}, '
                          f'direction_vector={direction_vector},'
                          f' line_chain_or_dic={line_chain_or_dic}')
+    def line_to_directed_line(self,location_point,line_chain_or_dic):
 
+        return self.directed_line_drop(location_point=location_point,line_chain_or_dic=line_chain_or_dic)
 
 
 
@@ -1410,6 +1412,18 @@ class Tools2D:
 
     # =========================================
 
+def get_32bit_color(bit32_color):
+    """
+    此函数将32位颜色提取成10进制数,范围0-255
+    alpha,red,green,blue
+    """
+    # 从 32 位颜色值中提取 alpha 通道
+    alpha = (bit32_color >> 24) & 0xFF
+    red = (bit32_color >> 16) & 0xFF  # 提取红色通道
+    green = (bit32_color >> 8) & 0xFF  # 提取绿色通道
+    blue = bit32_color & 0xFF  # 提取蓝色通道
+    return  {'alpha':alpha,'red':red,'green':green,'blue':blue}
+
 def screen_draw_surface(surfacedic,floor):
     surface_drawed={}
     allsurfacelist=surfacedic.keys()
@@ -1458,6 +1472,7 @@ def screen_draw_SegmentLine(SegmentLine_dic, floor):
                 local_group.append(i)
         py5.line(*local_group)
 
+
 def screen_draw_vector(vector_or_vector_list,start_point):
     tem = Tools2D()
     def arrow(vector):
@@ -1490,7 +1505,8 @@ def screen_draw_vector(vector_or_vector_list,start_point):
         tem.Segmentline_drop(i[0], i[1])
     screen_draw_SegmentLine(tem.get_Segmentline_dic(),floor=0)
 
-def draw_directed_line(line_detail_dict, color=py5.color(10, 10, 0, 255), stroke_weight=3,floor=0):
+
+def draw_directed_line(line_detail_dict, color=py5.color(10, 10, 0, 255), stroke_weight=3,floor=0,minimum=50):
     #把direction_vector获取出来,通过set_norm来改变长度(细分程度),然后平移direction_vector,收尾相接,得到一条渐变线
     #1部分画虚线 ;2部分画实线 . . . .
     #从直线末端倒着画?如何取到直线末端?
@@ -1524,28 +1540,66 @@ def draw_directed_line(line_detail_dict, color=py5.color(10, 10, 0, 255), stroke
         positive_point, negative_point = B_point, A_point
 
     #正方向线段处理
-    positive_segment_line = tem.Segmentline_drop(positive_point, line_detail_dict['location_point'], **input_value)
+    positive_segment_line = tem.Segmentline_drop(line_detail_dict['location_point'], positive_point, **input_value)
     positive_segment_line_dict = tem.Segmentline_get_info(positive_segment_line)
-    screen_draw_SegmentLine({0:positive_segment_line_dict},positive_segment_line_dict['floor'])
+    color_trans_segment_line_dicts = (
+        _color_transition_segment_line(positive_segment_line_dict, **input_value,minimum=minimum))
+    #alpha输入120的时候出错了!
+    screen_draw(Seglinedic= color_trans_segment_line_dicts)
 
     #负方向线段处理
     negative_segment_line = tem.Segmentline_drop(negative_point, line_detail_dict['location_point'], **input_value)
-    negative_segment_line_get_info = tem.Segmentline_get_info(negative_segment_line)
-    dotted_negative_segment_line_dicts = _dotted_segment_line(5,negative_segment_line_get_info,**input_value)
+    negative_segment_line_dict = tem.Segmentline_get_info(negative_segment_line)
+    dotted_negative_segment_line_dicts = _dotted_segment_line(negative_segment_line_dict,spacing=10,**input_value)
     screen_draw(Seglinedic=dotted_negative_segment_line_dicts)
 
+def _color_transition_segment_line(seg_line_get_info, color, stroke_weight, floor=0, minimum=0, sampling=5):
+    """
+    自A向B逐渐变浅的线段
+    sampling:采样范围1-128
+    """
+    tem=Tools2D()
 
+    # 提取端点
+    point_A, point_B = seg_line_get_info['location']
+    x1, y1 = point_A
+    x2, y2 = point_B
 
+    color_dict = get_32bit_color(color)
+    color_alpha = color_dict['alpha']
+    color_RGB = [color_dict['red'], color_dict['green'], color_dict['blue']]
+    delta_alpha = color_alpha - minimum  # 颜色范围
 
+    if color_alpha <= minimum + sampling or delta_alpha<=sampling: #增加一个梯度范围,因为alpha接受的是整数,至少要有1的梯度差
+        warnings.warn(f"当前透明度:{color_alpha},最小值{minimum},梯度小于采样值{sampling}")
+        tem.Segmentline_drop(point_A, point_B, floor=floor, color=color, stroke_weight=stroke_weight)
+        return tem.get_Segmentline_dic()
 
+    line_num = math.ceil(delta_alpha / sampling)  # 向上取整,至少有2条
+    # 因为color_alpha>minimum+sampling 不会出现delta=sampling的情况
 
-# def _draw_color_fade_segment_line(sampling_rate,speed,minimum)
+    for i in range(0,line_num):
 
-def _dotted_segment_line(spacing, seg_line_get_info, color, stroke_weight, floor=0):
+        ratio_color = i/(line_num-1) #由于至少有两条 所以不会发送 除0 错误
+        the_color = color_RGB + [round(color_alpha-delta_alpha*ratio_color)]
+
+        ratio_start = i / line_num
+        ratio_end = (i + 1) / line_num
+        x_start = x1 + (x2 - x1) * ratio_start
+        y_start = y1 + (y2 - y1) * ratio_start
+        x_end = x1 + (x2 - x1) * ratio_end
+        y_end = y1 + (y2 - y1) * ratio_end
+
+        tem.Segmentline_drop([x_start,y_start],[x_end,y_end],floor=floor,color=py5.color(*the_color),
+                             stroke_weight=stroke_weight)
+
+    return tem.get_Segmentline_dic()
+def _dotted_segment_line(seg_line_get_info,spacing,color,stroke_weight,floor=0):
     """
     绘制均匀分布的虚线段（至少需要3段才能形成虚线）
     :param spacing: 每段虚线的目标间距
     :param seg_line_get_info: 输入线段信息
+    返回一组线段字典
     """
     # 工具类实例化
     tem = Tools2D()
@@ -1561,7 +1615,6 @@ def _dotted_segment_line(spacing, seg_line_get_info, color, stroke_weight, floor
     x2, y2 = point_B
 
     # 转换为直线信息
-    print('seg_line_get_info',seg_line_get_info)
     line = tem.Segmentline_to_line([point_A, point_B], temp=True)
     a = line.get('a', 1)  # 获取直线参数a
     k = line.get('k', 0)  # 获取斜率k，默认值为0（水平线）
