@@ -1,7 +1,7 @@
-import gird
+# import gird
 import py5
 import json
-from YuSan_PY5_Toolscode import *
+from YuSan_PY5_Toolscode import Tools2D
 
 
 #TODO 这里需要将gird返回的字典 对应找到焦点
@@ -25,35 +25,50 @@ data={(0, 25.519524250561197): {0: {'str': 'y=315.0', 'k': 0, 'b': 315.0}, 1: {'
 def get_girds_interaction(girds_dict):
     """
     查找两个line字典之间的所有焦点
-    输入值:(():{0:xx,1:xx,-1:xx},():{0:xx,1:xx,-1:xx})
-    返回值:{((x,y),(x,y)):{(0,0):[a,b],(0,1):[a,b],(0,-1):[a,b]}},((x,y),(..)):{(..):[.],(.):[.]..}
+    输入值:((vector):{0:line_dict,1:xx,-1:xx},():{0:xx,1:xx,-1:xx})
     """
+
     tools=Tools2D()
     vectors_list = list(girds_dict.keys())
     lines_dict_list = list (girds_dict.values())
 
-    back_dict_keys=[]
-    for t,vector_A in enumerate(vectors_list[:-1]):#循环向量列表 切掉最后一项
-            for vector_B in vectors_list[t+1:]:#循环向量列表 切掉当前项
-                back_dict_keys.append((vector_A,vector_B))
+    interaction_dict={}
+    for t_out,vector_A in enumerate(vectors_list[:-1]):#循环向量列表 切掉最后一项
+        if vector_A not in interaction_dict:
+            interaction_dict[vector_A] = {}
+            #TODO 可以修改不用重新转换格式,而是一次性生成
+        for t_in,vector_B in enumerate(vectors_list[t_out+1:]):#循环向量列表 切掉当前项
+            #{(vectorx,y):{}}
+            if vector_B not in interaction_dict:
+                interaction_dict[vector_B] = {}
+            for number_A,line_detail_A in lines_dict_list[t_out].items():
+                for number_B,line_detail_B in lines_dict_list[(t_out+1)+t_in].items():
+                    interaction_point = tools.intersection_2line(line_detail_A, line_detail_B)
 
-    back_dict_values=[] #示例:[{(0,1):[x,y][x,y], (0,-1):[.,.],[..]}, {(..):..,():..}, ..}]
-    # lines_dict_list示例:[{0:(),1:(),-1:()}, {0:0,1:()...},..]
-    for t,lines_dict_A in enumerate(lines_dict_list[:-1]):
-            for lines_dict_B in lines_dict_list[t+1:]:
+                    if interaction_point is None: continue
 
-                value_dict = {}
-                for letter_A, line_detail_A in lines_dict_A.items():
-                    for letter_B,line_detail_B in lines_dict_B.items():
-                        interaction_point = tools.intersection_2line(line_detail_A,line_detail_B)
-                        if not interaction_point:
-                            raise ValueError("get_girds_interaction没有取到焦点,请检查输入")
-                        value_dict[(letter_A,letter_B)]=interaction_point
-                back_dict_values.append(value_dict)
+                    if number_A not in interaction_dict[vector_A]:
+                        interaction_dict[vector_A][number_A]=[]
+                    interaction_dict[vector_A][number_A].append(interaction_point)
 
-    back_dict= {key:back_dict_values[t] for t,key in enumerate(back_dict_keys)}
-    print(back_dict)
-    return back_dict_values
+                    if number_B not in interaction_dict[vector_B]:
+                        interaction_dict[vector_B][number_B]=[]
+                    interaction_dict[vector_B][number_B].append(interaction_point)
+                    #{(vectorx,y):{1:[[x,y],[x,y]],2:[...],..}..}
+    # print('interaction_dict',interaction_dict)
+
+    back_points_dict={}
+    for vector,num_dict in interaction_dict.items():
+        for num,points_list in num_dict.items():
+            for point in points_list:
+                point = tuple(point) #防止list不能做字典键
+                if point not in back_points_dict:
+                    back_points_dict[point]=[]
+                interaction_detail = {'vector':vector,'num':num}
+                back_points_dict[point].append(interaction_detail)
+                #{ (p_x,y):[{..},{..}],[p_x,y]:[...],.. }
+    return back_points_dict
+
 
 
 
@@ -114,7 +129,13 @@ def vertices_queue(sides):
         back[2*i] = i+1 #如果需要从1开始的话
         back[(2*i+sides) % (sides * 2)] = -(i+1)
     print(back)
-vertices_queue(11)
+
+
+gird_dict={(0, 25.519524250561197): {0: {'str': 'y=315.0', 'k': 0, 'b': 315.0}, 1: {'str': 'y=465.0', 'k': 0, 'b': 465.0}, -1: {'str': 'y=165.0', 'k': 0, 'b': 165.0}}, (-24.27050983124842, 7.885966681787004): {0: {'str': 'y=3.08x-882.53', 'k': 3.0776835371752527, 'b': -882.5323952076043}, 1: {'str': 'y=3.08x-397.12', 'k': 3.0776835371752527, 'b': -397.12219858263586}, -1: {'str': 'y=3.08x-1367.94', 'k': 3.0776835371752527, 'b': -1367.9425918325728}}, (-15.000000000000002, -20.6457288070676): {0: {'str': 'y=-0.73x+572.08', 'k': -0.7265425280053612, 'b': 572.0759915396478}, 1: {'str': 'y=-0.73x+386.67', 'k': -0.7265425280053612, 'b': 386.66579491467934}, -1: {'str': 'y=-0.73x+757.49', 'k': -0.7265425280053612, 'b': 757.4861881646164}}, (14.999999999999996, -20.645728807067602): {0: {'str': 'y=0.73x-9.16', 'k': 0.7265425280053607, 'b': -9.158030864641127}, 1: {'str': 'y=0.73x-194.57', 'k': 0.7265425280053607, 'b': -194.56822748960957}, -1: {'str': 'y=0.73x+176.25', 'k': 0.7265425280053607, 'b': 176.25216576032733}}, (24.270509831248425, 7.885966681786999): {0: {'str': 'y=-3.08x+1579.61', 'k': -3.0776835371752562, 'b': 1579.6144345325993}, 1: {'str': 'y=-3.08x+2065.02', 'k': -3.0776835371752562, 'b': 2065.0246311575684}, -1: {'str': 'y=-3.08x+1094.2', 'k': -3.0776835371752562, 'b': 1094.2042379076304}}}
+back=get_girds_interaction(gird_dict)
+print(back)
+
+# vertices_queue(11)
 
 # gird_data=gird.create_gird(5, 50, 100, [250, 250], num_of_line=3)
 # print(gird_data,gird.the_lines)
