@@ -2,6 +2,7 @@ import py5_tools
 py5_tools.add_jars('../jars')
 from YuSan_PY5_Toolscode import *
 from the_control import *
+import tilling
 color=[py5.color(255,0,0),
            py5.color(0,255,0),
            py5.color(0,0,255),
@@ -18,7 +19,7 @@ color=[py5.color(255,0,0),
            py5.color(255, 0, 125),
            py5.color(255, 125, 0),
            ] #颜色常量
-the_lines:list
+shifted_pen_vector:list
 the_shift_vectors_list:list
 def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
     """
@@ -27,8 +28,8 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
     zoom：每条网格线相隔的距离
     返回一个列表，每个列表中包含一个方向的平行网格线，由所有网格线组成一个gird
     """
-    global the_lines
-    global the_shift_vectors_list
+    global shifted_pen_vector #被平移后的垂直向量
+    global the_shift_vectors_list #平移向量
     tools = Tools2D()
     # 在【0，0】创建一个多边形,返回点集到vector
     vectors_origin = tools.regular_polygon(sides=sides, side_length=30)
@@ -38,8 +39,8 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
     #定义有向直线:
     the_lines_direction = vectors_origin_pen.copy()
     the_lines_location = [list(center) for i in range(len(the_lines_direction))]
-    the_lines = [ {'location':the_lines_location[i],'direction':the_lines_direction[i]}
-                 for i in range(len(the_lines_direction)) ]
+    shifted_pen_vector = [{'location':the_lines_location[i], 'direction':the_lines_direction[i]}
+                          for i in range(len(the_lines_direction))]
 
     for times,i in enumerate(vectors_origin_pen):
         origin_lines=tools.vector_to_line(i, center)# 把vectors_origin_pen换成直线,直线要经过center
@@ -52,8 +53,8 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
         tools.line_shift(origin_lines,the_shift_vector,rewrite=True,drop=False) #FIXME:这里平移反了!
 
         #平移有向直线的坐标点
-        the_lines[times]['location']=tools.point_shift(the_shift_vector,the_lines[times]['location'])
-        print(the_lines[times]['location'])
+        shifted_pen_vector[times]['location']=tools.point_shift(the_shift_vector, shifted_pen_vector[times]['location'])
+        print(shifted_pen_vector[times]['location'])
 
     origin_lines_data = tools.get_line_dic() #取出的直线数据,准备平移
     tools.reset() #清除内容
@@ -73,19 +74,24 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
             positive_vector = tools.vector_change_norm(vectors_origin[t],zoom* i)
             negative_vector = tools.vector_change_norm(vectors_origin[t],zoom* -i)
 
+            #和origin_vector同方向的为正,反方向的为负
             line_positive_detail = tools.line_shift(line_dict,positive_vector,rewrite=False, drop=False)
             line_negative_detail = tools.line_shift(line_dict,negative_vector,rewrite=False, drop=False)
 
-            gird[the_key][the_time+1] = line_positive_detail
-            gird[the_key][-(the_time+1)] = line_negative_detail
-    print("========开始输出gird========")
+            gird[the_key][the_time+1] = line_positive_detail #命名方式1,2,3...
+            gird[the_key][-(the_time+1)] = line_negative_detail #-1,-2,-3...
+
+    # print("============每一组平移网格============")
     # for i,value in gird.items():
     #     print(i,'\n',value,'\n')
-    for i in the_lines:
-        print('原点(起点):',i['location'])
-        print('方向:',i['direction'])
-    print("==========================")
-    print('girds_dict:',gird)
+    # print("========每一组垂直向量平移后结果========")
+    # for i in shifted_pen_vector:
+    #     print('原点(起点):',i['location'])
+    #     print('方向:',i['direction'])
+    # print("\n===================================")
+    print('最终返回girds_dict:',gird)
+    # print("===================================\n")
+
     return gird
 
 
@@ -115,15 +121,22 @@ def draw():
 
     the_vector = list(gird_data.keys())
     screen_draw_vector(the_vector,screen_axis(-150,150))#画出原始向量
-    screen_draw_vector(the_shift_vectors_list,screen_axis(0,0))
-
-    for directed_line_dict in the_lines:
-        screen_draw_vector(directed_line_dict['direction'],directed_line_dict['location'])
+    # screen_draw_vector(the_shift_vectors_list,screen_axis(0,0))
 
     for times,line_dict in enumerate(the_lines_dict_list):
         screen_draw_lines(line_dict,color=color[times%len(color)])
 
     screen_draw_lines(get_o_gird(the_lines_dict_list),stroke_weight=5,color=py5.color(0,0,0,125))
+
+    for directed_line_dict in shifted_pen_vector:
+        screen_draw_vector(directed_line_dict['direction'],directed_line_dict['location'])
+
+    inter_info=tilling.get_girds_interaction(gird_data)
+    points_list=list(inter_info.keys())
+    # print(points_list)
+    tem=Tools2D()
+    tem.point_drop_group(points_list)
+    screen_draw_points(tem.get_point_dic())
     screen_print_fps()
 
 def get_o_gird(the_gird_data):
