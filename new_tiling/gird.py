@@ -50,7 +50,7 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
         the_shift_vector = tools.vector_change_norm(vectors_origin[times], distance)
         the_shift_vectors_list.append(the_shift_vector)
         #通过把平移向量distance_vector的x, y叠加在直线上, 平移直线
-        tools.line_shift(origin_lines,the_shift_vector,rewrite=True,drop=False) #FIXME:这里平移反了!
+        tools.line_shift(origin_lines,the_shift_vector,rewrite=True,drop=False)
 
         #平移有向直线的坐标点
         shifted_pen_vector[times]['location']=tools.point_shift(the_shift_vector, shifted_pen_vector[times]['location'])
@@ -62,7 +62,6 @@ def create_gird(sides, distance=0, zoom=100, center=(100,100), num_of_line=50):
     gird= {} #{ vector_origin[0]:{0:{},1:{},-1:{},2:{}..}, vector_origin[1]:{0:{},1:{}...}, ...] 数字是循环的次数
     # 平移gird_0，构建平行网格gird
     for t, (letter, line_dict) in enumerate(origin_lines_data.items()):#遍历原始gird每一条线
-
         the_key = tuple(vectors_origin[t]) #字典的键是原始向量,但是需要不可变对象
         gird[the_key]={0:line_dict}
         #在首行加入gird_0(原始线)
