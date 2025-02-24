@@ -499,17 +499,17 @@ class Tools2D:
                 raise ValueError(f'没有找到给定line：{line}')
             line = self.line_dic[line]
 
-        # 如果没有提供取值范围 TODO: 逻辑上第一判断和后面两个重复了
+        # 如果没有提供取值范围
         if x_range is None and y_range is None:
             print('没有提供 x_range 和 y_range 取值范围,使用屏幕范围')
             if self.screeninfo is None:
                 raise ValueError("没有提供屏幕范围参数")
             x_range = self.screeninfo['xrange']
             y_range = self.screeninfo['yrange']
-        elif x_range is None and self.screeninfo is not None:
+        if x_range is None and self.screeninfo is not None:
             # 没有提供x_range取值范围,但可以使用屏幕范围的x_range缩小计算量
             x_range = self.screeninfo['xrange']
-        elif y_range is None and self.screeninfo is not None:
+        if y_range is None and self.screeninfo is not None:
             # 没有提供y_range取值范围,但可以使用屏幕范围的y_range缩小计算量
             y_range = self.screeninfo['yrange']
 
