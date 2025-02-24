@@ -12,3 +12,8 @@ https://link.springer.com/chapter/10.1007/978-3-031-28428-1_5
 
 Kurt Bruckner’s view on the Penrose tiling
 https://link.springer.com/article/10.1007/s11224-016-0790-1?fromPaywallRec=true
+
+备忘录:
+FIXME interaction 部分在偶数部分出现问题
+
+在gird绘制中 应该测试以下 同时绘制两个网格的效果
