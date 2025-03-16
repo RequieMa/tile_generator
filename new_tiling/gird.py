@@ -13,15 +13,18 @@ def setup():
     slider('distance', location=(50,py5.height-90), value=15, range_val=(0,500))
     slider('zoom', location=(50,py5.height-60), value=150, range_val=(0,500))
     slider('num', location=(50,py5.height-30), size=(500,20), value=30, range_val=(0,2000))
-    bs.create_gird(5, gap=150, max_num_of_line=30, center=sd.screen_axis(0, 0))
-    # print(f"初次生成the_gird:{gird_data}")
+    bs(sides=5, gap=150, max_num_of_line=30, center=sd.screen_axis(0, 0))
+    #print(f"初次生成the_gird:{the_gird}")
+    # print("Here")
+    # print(gird_data)
+    # print("Here")
 
 def draw():
     global gird_data
 
     back = slider_value()
     if back:
-        bs.create_gird(
+        bs(
             sides=back['sides'],
             shifted_distance=back['distance'],
             gap=back['zoom'],
@@ -31,7 +34,7 @@ def draw():
 
     py5.background(255)
 
-    the_lines_dict_list = bs.get_gird_lines_list() #取出每组gird
+    the_lines_dict_list = bs.lines_dict_data #取出每组gird
     the_origin_gird = bs.data_df.loc[:,0].tolist()
     the_vector = bs.data_df.loc[:,'origin_vector'].tolist()
 

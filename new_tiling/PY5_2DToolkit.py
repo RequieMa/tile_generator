@@ -3,6 +3,8 @@ from collections import defaultdict
 import math
 import warnings
 
+from numba.cuda.simulator.reduction import reduce
+
 from log_tool import time_logger
 
 
@@ -171,9 +173,6 @@ class Tools2D:
             self.screeninfo = screen_info
 
     def reset(self):
-        """
-        调用_init_()重新初始化
-        """
         self.point_dic.clear()  # 存储点的字典
         self.Segmentline_dic.clear()  # 存储线段的字典
         self.surface_dic.clear()  # 存储面的字典
@@ -412,7 +411,7 @@ class Tools2D:
         UserWarning: 输入为单个向量时发出警告。
 
         示例:
-            >>> Tools2D.vector_group_rotate_np(np.array([[1, 0], [0, 1]]), 45)
+            Tools2D.vector_group_rotate_np(np.array([[1, 0], [0, 1]]), 45)
         """
 
         if isinstance(vector_group, np.ndarray):
@@ -480,9 +479,6 @@ class Tools2D:
             back_np = np.where(np.abs(nums) < min_value, 0, back_np)
         if max_value:
             back_np = np.where(np.abs(nums) > max_value, np.nan, back_np)
-        if len(nums) == 0:
-            raise ValueError("没有过滤任何值")
-
         return back_np
 
     @staticmethod
@@ -1069,6 +1065,108 @@ class Tools2D:
         # 如果所有变量都已知，直接返回
         return known_values
 
+    def _trans_line_to_matrix(self, line)-> np.ndarray:
+        """
+        将直线表示转换为矩阵形式（齐次坐标系下的直线方程系数）。
+
+        Args:
+            line: 可以是以下类型之一：
+                - dict: 包含直线参数 {'k': 斜率, 'b': 截距}，可选 'a'（默认为 0）。
+                - list: 包含多条直线表示（dict 或 id）的列表。
+                - str/int/...: line_dic 中的直线 ID（不可变对象）。
+
+        Returns:
+            np.ndarray: 直线方程的系数矩阵 [k, -a, b]。
+                - 对于单一输入，返回形状为 (3,) 的数组。
+                - 对于列表输入，返回形状为 (N, 3) 的数组，其中 N 是直线数量。
+
+        Raises:
+            ValueError: 如果输入的 line ID 未在 line_dic 中找到。
+
+        Notes:
+            - 将直线方程 y=kx+b 表示为系数向量 [k, -a, b]。
+            - 支持批量处理多条直线的转换。
+
+        """
+        def extract_np(l_d:dict)-> np.ndarray:
+            if 'directed' not  in l_d:
+                a = 0 if 'a' in l_d else 1
+                k, b = l_d['k'], l_d['b']
+                return np.array([k, -a, b])
+            else:
+                return extract_np(self.directed_line_to_line(l_d,temp=True))
+        if isinstance(line, list):
+            matrix_list = []
+            for item in line:
+                if isinstance(item, dict):
+                    matrix_list.append(extract_np(item))
+                else:
+                    if item in self.line_dic:
+                        matrix_list.append(extract_np(self.line_dic[item]))
+                    else:
+                        raise ValueError(f'line_dic中,没有找到id{item},完整输入:{line}')
+            return np.array(matrix_list)  # Returns a NumPy array of matrices (stacked along axis 0)
+        if isinstance(line, dict):
+            return extract_np(line)
+        if line in self.line_dic:
+            return extract_np(self.line_dic[line])
+        else:
+            raise ValueError (f'line_dic中,没有找到id{line}')
+
+    def inter_line_group_np(self,lines_a:list,lines_b:list, x_range: list | tuple = None, y_range: list | tuple = None):
+        """
+
+        计算两组直线的交点，使用 NumPy 批量处理。
+
+        Args:
+            lines_a (list): 第一组直线的列表，每个元素可以是：
+                - dict: 包含直线参数 {'k': 斜率, 'b': 截距}，若包含 'a'，则 a=0，表示 0=kx+b
+                - str/int/...: self.line_dic 中的直线 ID（不可变对象）
+            lines_b (list): 第二组直线的列表，格式同 lines_a
+
+        Returns:
+            numpy.ndarray: 交点坐标矩阵，形状为 (N, M, 2)
+                - N: lines_a 中的直线数量
+                - M: lines_b 中的直线数量
+                - 2: 每个交点的 [x, y] 坐标
+                - 若交点不存在（平行线），对应位置值为 NaN
+
+        Notes:
+            - 使用齐次坐标系和叉积计算交点。
+            - 利用 NumPy 的广播机制实现批量计算。
+            - 输出矩阵的第 (i, j) 个元素表示 lines_a[i] 和 lines_b[j] 的交点。
+            - 对平行线（w 接近零）的情况返回 NaN。
+            - 使用阈值 1e-6 判断平行线。
+
+        """
+        a_np,b_np = self._trans_line_to_matrix(lines_a),self._trans_line_to_matrix(lines_b)
+        # n_num = a_np.shape[0]
+        # m_num = b_np.shape[0]
+        # a_np: N * 3 | b_np: M * 3
+        # 利用python-numpy中的广播机制 批量求解线段和直线的交点
+        a_np = a_np[:, np.newaxis, :]  # N * 1 * 3
+        b_np = b_np[np.newaxis, :, :]  # 1 * M * 3
+        inter_homo = np.cross(a_np,b_np)# N * M * 3
+        x, y, w = inter_homo[:, :, 0], inter_homo[:, :, 1], inter_homo[:, :, 2]
+
+        # 计算掩码
+        mask_no_inter = np.abs(w) > 1e-6  # 设置一个阈值来判断 w 是否接近零
+        final_mask = mask_no_inter
+        if x_range:
+            x_min, x_max = sorted(x_range)
+            mask_x = (x_min <= x) & (x <= x_max)
+            final_mask = final_mask & mask_x
+        if y_range:
+            y_min, y_max = sorted(y_range)
+            mask_y = (y_min <= y) & (y <= y_max)
+            final_mask = final_mask & mask_y
+
+        # 应用掩码计算最终结果
+        inter_points_np = np.full_like(inter_homo[:, :, :2], [np.nan,np.nan], dtype=np.float64)
+        # [:, :, :2] 索引切片 取[x,y] 原axis:2-->[x,y,w]
+        inter_points_np[final_mask, 0] = self.reduce_errors_np(x[final_mask] / w[final_mask])  # 计算 x' = x / w
+        inter_points_np[final_mask, 1] = self.reduce_errors_np(y[final_mask] / w[final_mask])  # 计算 y' = y / w
+        return inter_points_np
 
     def intersection_2_Segmentline_Matrix(self, Aline, Bline):
         """
