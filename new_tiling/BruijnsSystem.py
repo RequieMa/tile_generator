@@ -2,23 +2,21 @@
 import random
 import sys
 import time
-
-from bokeh.util.logconfig import level
-from streamlit import columns
-
+import multiprocessing
+import gc
 from new_tiling.PY5_2DToolkit import Tools2D
 import numpy as np
 import pandas as pd
 import warnings
 from itertools import islice, product
 from tabulate import tabulate
-import humanize
+# import humanize
+from joblib import Parallel, delayed
 
 tools = Tools2D()
 
-
 class BruijnsSystem:
-    def __init__(self, sides: int = 5, origin_norm: int = 80, shifted_distance: int = 0, gap: int | list | tuple = 100,
+    def __init__(self, sides: int = 5, origin_norm: int|float = 80, shifted_distance: int|float = 0, gap: int | list | tuple = 100,
                  center: tuple = (100, 100), max_num_of_line: int = 50):
         self._grid_config = {
             'sides': sides,
@@ -83,14 +81,13 @@ class BruijnsSystem:
         # xs全称是"cross-section"，用于从DataFrame中提取特定的横截面数据。
         # 它通常用于多层索引（MultiIndex），允许通过指定某个索引级别和值来快速选择数据，无需手动拆分索引。
         _map_df = pd.DataFrame()
-        the_origin_vectors = self.data_df['origin_vector'].to_dict()
+        the_origin_vectors = self.data_df[['origin_vector','directed_vector']].T.to_dict('list')
         sides = len(the_origin_vectors)
-        pd_print(self.data_df,max_length=100)
-        info_zip: list = []  # clock_id,origin_id,mirror_id,vector
+
         if sides % 2 != 0:  # 奇数
-            mirror_vector = np.array(list(the_origin_vectors.values()))
-            mirror_vector = (-mirror_vector).tolist()
-            for index, the_vector in the_origin_vectors.items():
+            info_zip: list = []  # clock_id,origin_id,mirror_id,vector,distance_vector
+            for index, (the_vector,directed_vector) in the_origin_vectors.items():
+
                 # 例：sides = 5
                 # 圆被分成5个等分，并且存在另外5个镜像等分，总共10个分区
                 # 这种排列是由于180°旋转对称导致的
@@ -98,21 +95,44 @@ class BruijnsSystem:
                 # 索引镜像：列表长度为10，原索引 i 镜像到 (i + 镜像间隔:sides) % 总等分数:sides * 2
                 # 例如: 0, 2, 4, 6, 8 分别镜像到: 5, 7, 9, 1, 3
                 # 值: 1, 2, 3, 4, 5 分别变为: -1, -2, -3, -4, -5
-                info_zip.append([index * 2, index, index + sides, the_vector])
-                info_zip.append([(index * 2 + sides) % (sides * 2), index + 5, index, mirror_vector[index]])
-            _map_df = pd.DataFrame(info_zip, columns=['clock_id', 'origin_id', 'mirror_id', 'vector'])
+
+                vx,vy = the_vector
+                info_zip.append([index * 2,      #clock_id
+                                 index,          #origin_id
+                                 index + sides,  #mirror_id
+                                 the_vector,     #origin_vector
+                                 directed_vector #direction_vector
+                                 ])
+                # d_x,d_y = directed_vector
+                info_zip.append([(index * 2 + sides) % (sides * 2),
+                                 index + sides,
+                                 index,
+                                 [-vx,-vy],
+                                 np.NAN # [-d_x,-d_y] #TODO 这里可能出错误
+                                 ])
+
+            _map_df = pd.DataFrame(info_zip, columns=['clock_id', 'origin_id', 'mirror_id', 'vector','directed_vector'])
             _map_df.set_index(['clock_id', 'origin_id', 'mirror_id'], inplace=True)
             _map_df.sort_index(level='clock_id', inplace=True)
             _map_df.index = _map_df.index.droplevel('clock_id')
         else:
+
             # 例: sides = 6 时，向量 0 和 3, 1 和 4, 2 和 5 互为正对
             # 为了避免在初始状态 (shift_distance = 0) 下，walking 和 walking_mirror 选取到重复的向量
             # walking_mirror 的选取需要排除 walking 中已有的向量，并选择 "对位" 的向量
             # "对位" 的向量通过 (i + 镜像间隔:sides//2) % 总等分数:sides 计算得到，它指向与 index 索引向量正对的位置
-            info_zip = [[index, (index + sides // 2) % sides, the_vector]
-                        for index, the_vector in the_origin_vectors.items()]
-            _map_df = pd.DataFrame(info_zip, columns=['origin_id', 'mirror_id', 'vector'])
+
+            info_zip = [
+                         [index,                          #index
+                         (index + sides // 2) % sides,   #mirror_index
+                         the_vector,                     #origin_vector
+                         d_v]                            #direction_vector
+                         for index, (the_vector,d_v) in the_origin_vectors.items()
+                        ]
+
+            _map_df = pd.DataFrame(info_zip, columns=['origin_id', 'mirror_id', 'vector','directed_vector'])
             _map_df.set_index(['origin_id', 'mirror_id'], inplace=True)
+
         return _map_df
 
     @property
@@ -130,15 +150,21 @@ class BruijnsSystem:
             第一级索引表示 'gird' 的索引，第二级索引表示该层gird中有向直线的编号(line_num)。
             值表示交点坐标[float,float]。可以通过.loc[(index,num),(index,num)]查询任意两条线的交点
         """
+        i_t = time.time()
+
         df_col = self.data_df.columns
         d_col = df_col[df_col.get_loc(0):]  # line的id列表
+        t_i = time.time()
 
+        print('data_loading')
         # 生成当前所有线段标识符（index, num）
         col = list(product(range(len(self.data_df)), d_col))
         # 获取对应的线段数据
         lines_np = self.data_df.loc[:, d_col].to_numpy().flatten()
         lines = lines_np.tolist()
+        print('loading_use:',time.time()-t_i)
 
+        print('start_interaction')
         if self._inter_df.empty:
             inter_inf = np.around(tools.inter_line_group_np(lines_a=lines, lines_b=lines), 10)
             self._inter_df = pd.DataFrame(inter_inf.tolist(), columns=col, index=col)
@@ -174,10 +200,13 @@ class BruijnsSystem:
                 tar_i = set(last_col) - set(col)
                 tar_i = list(tar_i)
                 self._inter_df.drop(index=tar_i, columns=tar_i, inplace=True)
+
+        print('interaction_used:',time.time()-t_i)
         return self._inter_df
 
     @property
     def tilling(self):
+        print('BS:start_load_tilling')
         if self.tilling_object:
             return self.tilling_object
         return Tilling_Create(map_df=self.map_df, inter_df=self.interaction_df)
@@ -223,7 +252,7 @@ class BruijnsSystem:
         # 创建一组origin_vectors
         vectors_origin = self._create_origin_vector_numpy(sides, origin_norm)
         # 取vector的垂直向量vector_pen
-        vectors_origin_pen = self.tools.vector_group_rotate_np(vectors_origin, 90).tolist()
+        vectors_origin_pen = tools.vector_group_rotate_np(vectors_origin, 90).tolist()
         vectors_origin = vectors_origin.tolist()
 
         # 定义有向直线origin_directed_line:0
@@ -272,7 +301,7 @@ class BruijnsSystem:
         self.data_df = self.data_df.reindex(columns=list(self.data_df.columns) + target_list, fill_value={})  # noqa
         # =============================== main ===============================
         # 平移gird_0，构建平行网格gird
-        for index, line_dict in self.data_df.loc[:, 0].to_dict().items():  # 遍历原始gird每一条线
+        for index, line_dict in self.data_df.loc[:, 0].items():  # 遍历原始gird每一条线
             for i in target_list:
                 o_v = self.data_df['origin_vector'][index]
                 shift_distance = gap[index] * i
@@ -286,8 +315,83 @@ class Tilling_Create:
         self.inter_df = inter_df
         self.map_df = map_df
         self.sorted_df = self._sorted_df()
+        self.tilling_map_p = pd.DataFrame()
 
+    def get_direction_map(self) -> dict:
+        """
+        根据direction_vector来确定直线走向。
+        定义如下：
+        - +x, +y（x递增）
+        - -x, +y（x递减）
+        - -x, -y（x递减）
+        - +x, -y（x递增）
+        该函数返回一个包含向量 x 和 y 分量符号的元组，用于指示向量在其象限中的方向。
 
+        参数:
+        line_tuple (tuple): 包含线条索引的元组。
+
+        返回:
+        tuple: 一个包含方向向量 x 和 y 分量符号（sx, sy）的元组。
+        """
+        tar = self.map_df['directed_vector']
+        r_d = {}
+        for i_,d_v in tar.items():
+            if not isinstance(d_v,list):
+                print('directed_vector is None')
+                continue
+            s_x ,s_y = np.sign(d_v[0]), np.sign(d_v[1])
+            if s_x < 0 or (s_x == 0 and s_y < 0):
+                r_d[i_[0]] = False
+                continue
+            r_d[i_[0]] = True
+        return r_d
+    @staticmethod
+    def sort(input_df, direction_dic):
+        the_dict = {}
+        df_index = input_df.index
+        for line_id, inter_list in input_df.items():
+            # print(inter_list)
+            arr = np.array(inter_list.tolist())
+            queue_p, indices, counts = np.unique(arr, axis=0, return_index=True, return_counts=True)
+            # queue_p: 排序后的队列 (去重, 默认以 [x,y] 中的 x 排序, 如果相同, 以 y 排序)
+            # indices: queue_p 中元素在原数组 arr 中的序号
+            # counts: 每个元素在 arr 中出现的次数
+            # 获取没有nan的序号
+            valid_mask = np.where(~np.isnan(queue_p).any(axis=1))
+
+            # 同时过滤三个数组
+            queue_p = queue_p[valid_mask]  # 过滤后的唯一值坐标
+            indices = indices[valid_mask]  # 过滤后的首次出现索引
+            counts = counts[valid_mask]  # 过滤后的计数 (形状与queue_p一致)
+
+            same_v = queue_p[counts > 1]  # 取具有重复的点[x,y]
+            same_id = indices[counts > 1]  # 重复点的index
+
+            if not direction_dic[line_id[0]]:
+                # 需要倒序
+                indices = indices[::-1]
+
+            # [same_index: line值的index序号] 将来要把这个index值全部替换成line的index序号
+            same_id_map = {
+                s_id: np.where((arr == s_v).all(axis=1))[0].tolist() for s_id, s_v in zip(same_id, same_v)
+            }
+            indices = indices.tolist()
+
+            for t_, i in enumerate(indices):
+                if i in same_id_map:
+                    indices[t_] = same_id_map.pop(i)
+                    continue
+                indices[t_] = [i]
+
+            r = (
+                [[df_index[_id] for _id in i_list] for i_list in indices]
+                + [np.NAN] * (len(df_index) - len(indices)) #保持维度一致,不然没法添加到dataframe
+                )
+            inf = [inter_list[i_list[0]] for i_list in indices]
+            #TODO
+            the_dict[line_id] = r
+
+        return the_dict
     def _sorted_df(self):
         """
         Bruijns 系统中基于交点建立网格线邻接关系的关键预处理步骤。
@@ -305,69 +409,27 @@ class Tilling_Create:
                     - `[line_index]`: 单条线在此点相交。
                     - `[line_index_1, line_index_2, ...]`: 多条线在此点相交。
         """
+        d_map = self.get_direction_map()
 
-        def get_direction(l_id: tuple) -> tuple:
-            """
-            根据direction_vector来确定直线走向。
-            定义如下：
-            - +x, +y（x递增）
-            - -x, +y（x递减）
-            - -x, -y（x递减）
-            - +x, -y（x递增）
-            该函数返回一个包含向量 x 和 y 分量符号的元组，用于指示向量在其象限中的方向。
+        inter_num = len(self.inter_df)
+        num = inter_num//500 if inter_num >1000 else 1
 
-            参数:
-            line_tuple (tuple): 包含线条索引的元组。
+        if num >1:
+            print('start-cut')
+            df_chunks = np.array_split(self.inter_df, num, axis=1)
+            print('finish-cut')
+        else:
+            df_chunks = [self.inter_df]
 
-            返回:
-            tuple: 一个包含方向向量 x 和 y 分量符号（sx, sy）的元组。
-            """
-            vector_id = l_id[0]
-            o_v = self.map_df.xs(vector_id, level='origin_id')['vector'].tolist()[0]
-            d_vector = tools.vector_rotate(o_v,90) #TODO 这里不能这么算 应该拓展map_df 直接获取
-            return np.sign(d_vector[0]), np.sign(d_vector[1])
+        # 使用 joblib.Parallel 并行调用 sort 方法
+        results = Parallel(n_jobs=num)(
+            delayed(self.sort)(chunk, d_map) for chunk in df_chunks
+        )  # backend="threading"
 
-        print('start-sorted')
-        #TODO 目前5000的级别就无法sorted了.
-
-        inter_data = self.inter_df
-        lines_index = inter_data.index
-        inter_dict = inter_data.to_dict(orient='list')  # 这里可以加.apply(map)把nan换成二维的[nan,nan]
+        # 合并各个分块返回的字典结果
         walk_dict = {}
-        print('trans-dict-finish')
-        for line_id, inter_list in inter_dict.items():
-            print(line_id)
-            arr = np.array(inter_list)
-            s_x, s_y = get_direction(line_id)
-            queue_p, indices, counts = np.unique(arr, axis=0, return_index=True, return_counts=True)
-            # queue_p: 排序后的队列 (去重, 默认以 [x,y] 中的 x 排序, 如果相同, 以 y 排序)
-            # indices: queue_p 中元素在原数组 arr 中的序号
-            # counts: 每个元素在 arr 中出现的次数
-            # 获取没有nan的序号
-            valid_mask = np.where(~np.isnan(queue_p).any(axis=1))
-
-            # 同时过滤三个数组
-            queue_p = queue_p[valid_mask]  # 过滤后的唯一值坐标
-            indices = indices[valid_mask]  # 过滤后的首次出现索引
-            counts = counts[valid_mask]  # 过滤后的计数 (形状与queue_p一致)
-
-            same_v = queue_p[counts > 1]  # 取具有重复的点[x,y]
-            same_id = indices[counts > 1]  # 重复点的id
-
-            same_id_dict = {
-                s_id: np.where((arr == s_v).all(axis=1))[0]  # {same_id: line值的index序号}
-                for s_id, s_v in zip(same_id, same_v)
-            }
-
-            if s_x < 0 or (s_x == 0 and s_y < 0):
-                # 这两种情况需要取倒序
-                indices = indices[::-1]
-
-            walk_dict[line_id] = [
-                                     [lines_index[i]] if i not in same_id_dict
-                                     else [lines_index[e] for e in same_id_dict[i]]
-                                     for i in indices
-                                 ] + [np.nan] * (len(lines_index) - len(indices))  # 防止长度不一致.
+        for i in results:
+            walk_dict = walk_dict | i
 
         return pd.DataFrame(walk_dict).dropna(how='all')
 
@@ -437,8 +499,8 @@ class Tilling_Create:
                   格式: {vector_id: segment。}
                   其中segment。是一个[x, y]坐标的列表
         """
-        enable_map = self.map_df[(self.map_df.index.get_level_values('origin_id').isin(vectors_id_list)) | (
-            self.map_df.index.get_level_values('mirror_id').isin(vectors_id_list))] #一个布尔or操作,找到所有符合要求的信息
+        enable_map = self.map_df[(self.map_df.index.get_level_values('origin_id').isin(vectors_id_list)) |
+                                 (self.map_df.index.get_level_values('mirror_id').isin(vectors_id_list))] #一个布尔or操作,找到所有符合要求的信息
         enable_vectors = enable_map['vector'].tolist()
         enable_id = enable_map.index.get_level_values('origin_id').tolist()
         # enable_vectors只是移动的路径,需要绘制成坐标点
@@ -581,15 +643,32 @@ class Tilling_Create:
             seg_data.extend(seg)
         return seg_data
 
-    def splice_tilling(self,a_tilling,b_tilling,direction):
+    def splice_tilling(self,a_tilling,b_tilling,direction=None):
         #direction: origin_vector 代表a与b重合的位置(从a的角度),例:a的1和b的6重合-->direction=1
+
+        # #临时的方法
+        # if not direction:
+        #     a_v = a_tilling.keys()
+        #     a_v_mirror = [self.origin_to_mirror(_v) for _v in a_v]
+        #     for a_v_m in a_v_mirror:
+        #         if a_v_m in b_tilling:
+        #             direction = self.mirror_to_origin(a_v_m)
+        #     print('direction: ',direction)
+        #     print('a_tilling:',a_tilling)
+        #     print('b_t...:',b_tilling)
+        #     if not direction:
+        #         raise ValueError('not direction 还是没找到!')
+
         #================main===============
 
         # 因为两次直线方向相反,所以第一个取[0],第二个取[1]
+
         b_same = b_tilling[self.mirror_to_origin(direction)][0]
+
         o_same = a_tilling[direction][1]
 
-        shift_v =  [o_same[0]-b_same[0],o_same[1]-b_same[1]]
+        shift_v = [o_same[0] - b_same[0], o_same[1] - b_same[1]]
+
         b_tilling = {k:tools.point_shift(v,shift_v)for k,v in b_tilling.items()}
 
         return b_tilling
@@ -663,7 +742,7 @@ def deep_get_size(obj, seen=None):
 
 if __name__ == "__main__":
     a = BruijnsSystem(sides=5, max_num_of_line=20, shifted_distance=0)
-    a(sides=5, max_num_of_line=200, shifted_distance=30,gap=12)
+    a(sides=5, max_num_of_line=5000, shifted_distance=0,gap=12)
     t= a.tilling
     p = t._center_point
     n_d,f_d = t._next_loc_list(p)

@@ -2197,14 +2197,11 @@ class Screen_draw:
             if not self.draw_directed_line(line, color=color, stroke_weight=stroke_weight):
                 skip_times += 1
 
-    def screen_draw_points(self, pointdic, size=5, color=create_32bit_color(255, 0, 0, 255), fill=None):
+    def screen_draw_points(self, pointdic,s_weight=3, size=5, color=create_32bit_color(255, 0, 0, 255), fill=None):
         self.tools.reset()
-        if fill is None:
-            fill = self.py5.color(0, 0, 0, 255)
-
         for key, value in pointdic.items():
             x, y = value
-            self.py5.stroke_weight(2)
+            self.py5.stroke_weight(s_weight)
             self.py5.stroke(color)
             if fill is None:
                 self.py5.no_fill()
